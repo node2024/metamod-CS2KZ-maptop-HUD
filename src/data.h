@@ -1,5 +1,6 @@
 #pragma once
 #include "model.h"
+#include "hud_settings.h"
 #include "config.h"
 #include "run_details.h"
 #include <chrono>
@@ -22,6 +23,7 @@ public:
     using RankCallback = std::function<void(GlobalRank)>;
     std::string base, api = "https://api.cs2kz.org", configError;
     int menuSeconds = 120;
+    DisplayMode displayMode = DisplayMode::Studio;
 
     bool LoadConfig(const std::string& baseDir, IFileSystem* filesystem, bool initial = true) {
         base = baseDir;
@@ -42,7 +44,11 @@ public:
         }
         try {
             std::ifstream file(base + "/addons/kz_maptop_hud/config.json");
-            if (file) menuSeconds = std::clamp(Json::parse(file).value("menu_seconds", 120), 15, 600);
+            if (file) {
+                const auto settings = ReadHudSettings(Json::parse(file));
+                menuSeconds = settings.menuSeconds;
+                displayMode = settings.displayMode;
+            }
         } catch (const std::exception&) { /* UI settings must not override or disable CS2KZ's connections. */ }
         return true;
     }
@@ -88,7 +94,7 @@ public:
         http->SetHTTPRequestAbsoluteTimeoutMS(request->request, 8000);
         http->SetHTTPRequestRequiresVerifiedCertificate(request->request, true);
         http->SetHTTPRequestHeaderValue(request->request, "Accept", "application/json");
-        http->SetHTTPRequestUserAgentInfo(request->request, "KZMapTopHUD/0.1.13");
+        http->SetHTTPRequestUserAgentInfo(request->request, "KZMapTopHUD/0.1.15");
         if (!request->request || !http->SendHTTPRequest(request->request, &request->call)) {
             if (request->request) http->ReleaseHTTPRequest(request->request);
             auto fn = std::move(request->callback);
@@ -191,8 +197,8 @@ public:
                     if (!row.steam || row.time <= 0 || !std::isfinite(row.time)) continue;
                     page.rows.push_back(std::move(row));
                 }
-                page.more = page.rows.size() > PageSize;
-                if (page.more) page.rows.resize(PageSize);
+                page.more = page.rows.size() > static_cast<size_t>(RecordsPerPage(filter));
+                if (page.more) page.rows.resize(RecordsPerPage(filter));
                 ready_.push_back([callback, page] { callback(page, {}); });
             }, [this, callback](std::string, int) {
                 ready_.push_back([callback] { callback({}, "Local database query failed. Check the CS2KZ v0.0.189 schema and cfg."); });

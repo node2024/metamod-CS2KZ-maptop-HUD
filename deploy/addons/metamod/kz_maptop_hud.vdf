@@ -1,0 +1,5 @@
+"Metamod Plugin"
+{
+    "alias" "kz_maptop_hud"
+    "file"  "addons/kz_maptop_hud/bin/linuxsteamrt64/kz_maptop_hud"
+}

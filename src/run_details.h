@@ -2,6 +2,24 @@
 #include "global_rank.h"
 
 namespace maptop {
+// Keep the time in the row's uninterrupted Label instead of two-character numeric cells.
+inline std::string RunTableLabel(const Record& row) {
+    return "#" + std::to_string(row.rank) + "   " + RankingTime(row.time) + "   " + Text(row.name, 32);
+}
+inline std::array<std::string, 5> RunTableCells(const Record& row, bool expanded = false) {
+    std::array<std::string, 5> cells;
+    auto column = [&](std::string text, size_t start, size_t count) {
+        const auto width = count * 2;
+        if (text.size() > width) text = text.substr(0, width - 2) + "..";
+        text.resize(width, ' ');
+        for (size_t i = 0; i < count; ++i) cells[start + i] = text.substr(i * 2, 2);
+    };
+    column(std::to_string(row.teleports), 0, 3);
+    cells[3] = expanded ? "-" : "+";
+    cells[4] = row.replay ? "OK" : "No";
+    return cells;
+}
+
 // v0.0.189 stores zone passage times, not whole-run movement statistics.
 // Invalid or legacy metadata must never make an otherwise valid ranking unusable.
 inline std::vector<std::string> CourseStats(const std::string& metadata, double runtime) {

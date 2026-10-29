@@ -30,8 +30,8 @@ ALTER TABLE Times ADD COLUMN Metadata TEXT;
 ALTER TABLE Times ADD COLUMN Created TEXT;
 UPDATE Times SET Metadata='{"splitZoneTimes":[30,60]}',Created='2026-10-24 12:34:56' WHERE ID='faster-tp';
 """)
-def query(category, offset=0, mode="classic"):
-    sql = subprocess.check_output([sys.argv[1], "--sql", category, str(offset), mode], text=True)
+def query(category, offset=0, mode="classic", page_size=5):
+    sql = subprocess.check_output([sys.argv[1], "--sql", category, str(offset), mode, str(page_size)], text=True)
     return db.execute(sql).fetchall()
 
 overall = query("overall")
@@ -50,4 +50,11 @@ for category in ("overall", "pro"):
     for mode, expected in (("classic", 17), ("vanilla", 1)):
         sql = subprocess.check_output([sys.argv[1], "--count-sql", category, "0", mode], text=True)
         assert db.execute(sql).fetchone()[0] == expected
-print("local ranking / PRO / ties / bans / styles / courses / pagination / mode selection: OK")
+for category in ("overall", "pro"):
+    first = query(category, page_size=15)
+    last = query(category, offset=15, page_size=15)
+    assert len(first) == 16 and len(last) == 2
+    assert first[15] == last[0]
+    all_rows = first[:15] + last
+    assert len(all_rows) == len({row[1] for row in all_rows}) == 17
+print("local ranking / PRO / ties / bans / styles / courses / Studio and Table pagination / mode selection: OK")

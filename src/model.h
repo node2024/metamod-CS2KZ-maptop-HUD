@@ -15,6 +15,9 @@ using Json = nlohmann::json;
 // Studio permits 18 items / 24 rendered slots per native page.
 // Courses, five records (10 items, each spanning 2+1 columns) and three pager buttons fit together.
 constexpr int PageSize = 5;
+// Stock Table has 18 rows: one course selector, 15 records and two inline action rows.
+// Its pager lives in the header, immediately after Type.
+constexpr int TablePageSize = 15;
 constexpr uint64_t SteamBase = 76561197960265728ULL;
 
 inline bool UUID(const std::string& s) {
@@ -75,7 +78,9 @@ struct Filter {
     bool global = false, pro = false;
     std::string map, course, mode = "classic";
     int offset = 0;
+    int pageSize = PageSize;
 };
+inline int RecordsPerPage(const Filter& filter) { return std::clamp(filter.pageSize, 1, TablePageSize); }
 struct Record {
     std::string id, name, server, created;
     std::vector<std::string> courseStats;
@@ -109,7 +114,7 @@ inline std::string Encode(const std::string& value) {
 inline std::string RecordsURL(const std::string& api, const Filter& f) {
     return api + "/records?top=true&map=" + Encode(f.map) + "&course=" + Encode(f.course)
         + "&mode=" + f.mode + (f.pro ? "&has_teleports=false" : "")
-        + "&sort_by=time&sort_order=ascending&limit=" + std::to_string(PageSize + 1) + "&offset=" + std::to_string(f.offset);
+        + "&sort_by=time&sort_order=ascending&limit=" + std::to_string(RecordsPerPage(f) + 1) + "&offset=" + std::to_string(f.offset);
 }
 inline Page ParseRecords(const std::string& body, const Filter& f) {
     auto data = Json::parse(body);
@@ -137,8 +142,8 @@ inline Page ParseRecords(const std::string& body, const Filter& f) {
             throw std::runtime_error("Invalid record in API response");
         page.rows.push_back(std::move(r));
     }
-    page.more = page.rows.size() > PageSize;
-    if (page.more) page.rows.resize(PageSize);
+    page.more = page.rows.size() > static_cast<size_t>(RecordsPerPage(f));
+    if (page.more) page.rows.resize(RecordsPerPage(f));
     return page;
 }
 
@@ -159,7 +164,7 @@ inline std::string RankingSourceSQL(const Filter& f, const std::function<std::st
 }
 inline std::string RecordsSQL(const Filter& f, const std::function<std::string(const std::string&)>& escape) {
     return "SELECT t.ID,t.SteamID64,p.Alias,t.RunTime,t.Teleports,t.Metadata,t.Created " + RankingSourceSQL(f, escape)
-        + " ORDER BY t.RunTime,t.SteamID64,t.ID LIMIT " + std::to_string(PageSize + 1)
+        + " ORDER BY t.RunTime,t.SteamID64,t.ID LIMIT " + std::to_string(RecordsPerPage(f) + 1)
         + " OFFSET " + std::to_string(f.offset);
 }
 inline std::string RankingCountSQL(const Filter& f, const std::function<std::string(const std::string&)>& escape) {

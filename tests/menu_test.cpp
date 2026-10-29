@@ -28,12 +28,15 @@ struct Item {
     int span = 1;
     MenuItemRole role = MenuItemRole::Button;
     std::vector<std::string> details;
+    std::vector<std::string> cells;
     std::vector<std::string> options;
 };
 struct Chip {
     std::string label;
+    std::string value;
     std::vector<std::string> options;
     int selected = 0;
+    bool action = false, note = false;
 };
 struct Menu {
     std::string title;
@@ -41,6 +44,7 @@ struct Menu {
     std::vector<Item> items;
     std::vector<Chip> chips;
     std::vector<std::string> heads;
+    std::vector<int> headWidths;
     MenuItemSelectFn select;
     MenuChipFn chip;
     MenuEndFn end;
@@ -50,6 +54,7 @@ struct Menu {
 };
 std::map<MenuHandle, Menu> menus;
 MenuHandle active = 0, nextHandle = 0;
+MenuType renderedType = MenuType::Panorama;
 int shownMessages = 0;
 bool turning = false;
 uint64_t playerSteam = SteamBase + 2;
@@ -77,6 +82,7 @@ bool Display(void*, MenuHandle h, int slot, float) {
     return true;
 }
 MenuHandle Active(void*, int) { return active; }
+MenuType ActiveType(void*, int) { return renderedType; }
 void Cancel(void*, int slot) {
     const auto old = active; active = 0;
     if (old && menus.count(old)) { const auto callback = menus.at(old).end; if (callback) callback(old, slot, MenuEndReason::Cancelled); }
@@ -120,9 +126,15 @@ void Replay(void*, CPlayerSlot slot, const CCommand& args) {
     replayCommands.emplace_back(args.Arg(1));
 }
 int ColumnAdd(void*, MenuHandle h, const char* label, int cells, int) {
-    assert(cells == 0); // the time is never split into 26px cells
     menus.at(h).heads.emplace_back(label);
+    menus.at(h).headWidths.push_back(cells);
     return static_cast<int>(menus.at(h).heads.size()) - 1;
+}
+void Cells(void*, MenuHandle h, int i, const char* const* values, int count) {
+    assert(count <= 12);
+    auto& cells = menus.at(h).items.at(i).cells;
+    cells.clear();
+    for (int cell = 0; cell < count; ++cell) cells.emplace_back(values[cell]);
 }
 void Details(void*, MenuHandle h, int i, const char* const* lines, int count) {
     auto& details = menus.at(h).items.at(i).details;
@@ -135,8 +147,17 @@ int ChipAdd(void*, MenuHandle h, const char* label, const char* const* options, 
     menus.at(h).chips.push_back(std::move(chip));
     return static_cast<int>(menus.at(h).chips.size()) - 1;
 }
-int ActionAdd(void* p, MenuHandle h, const char* label, const char* const* options, int count, bool on) { return ChipAdd(p, h, label, options, count, on ? 1 : 0); }
-int NoteAdd(void* p, MenuHandle h, const char* label, const char*) { return ChipAdd(p, h, label, nullptr, 0, 0); }
+int ActionAdd(void* p, MenuHandle h, const char* label, const char* const* options, int count, bool on) {
+    const int chip = ChipAdd(p, h, label, options, count, on ? 1 : 0);
+    menus.at(h).chips.at(chip).action = true;
+    return chip;
+}
+int NoteAdd(void* p, MenuHandle h, const char* label, const char* value) {
+    const int chip = ChipAdd(p, h, label, nullptr, 0, 0);
+    menus.at(h).chips.at(chip).note = true;
+    menus.at(h).chips.at(chip).value = value;
+    return chip;
+}
 void ChipCallback(void*, MenuHandle h, MenuChipFn callback) { menus.at(h).chip = std::move(callback); }
 void EndCallback(void*, MenuHandle h, MenuEndFn callback) { menus.at(h).end = std::move(callback); }
 void RefreshCallback(void*, MenuHandle h, MenuRefreshFn callback) { menus.at(h).refresh = std::move(callback); }
@@ -409,6 +430,144 @@ struct MapTopHUDUITest {
         hud.data_.Frame(); // queued callbacks for old filter generations are inert
         assert(active == 0 && !session.board);
         assert(menus.empty());
+
+        { // Table-specific scenarios share the provider, but keep their fixture names scoped.
+            hud.data_.displayMode = DisplayMode::Table;
+            session.steam = playerSteam;
+            session.filter = {};
+            session.filter.map = hud.map_; session.filter.course = "Main";
+            session.filter.global = true; session.filter.pageSize = TablePageSize;
+            session.courses = {"Main", "Bonus"};
+            Page table; table.more = true;
+            for (int i = 0; i < TablePageSize; ++i) {
+                auto row = page.rows.at(i % PageSize);
+                char id[64]; std::snprintf(id, sizeof(id), "019b618d-60f0-75c3-9e82-%012x", i + 1);
+                row.id = id; row.name = "Table player " + std::to_string(i);
+                row.rank = i + 1; row.time = 314.453125 + i;
+                row.steam = playerSteam + i; row.replay = i != 1;
+                table.rows.push_back(row);
+            }
+            auto tableBoard = [&] {
+                if (session.courses.empty()) session.courses = {"Main", "Bonus"};
+                hud.Board(0, table);
+            };
+            auto itemIndex = [&](const std::string& info) {
+                const auto& items = menus.at(active).items;
+                const auto it = std::find_if(items.begin(), items.end(), [&](const Item& item) { return item.info == info; });
+                assert(it != items.end());
+                return static_cast<int>(it - items.begin());
+            };
+            auto pickInfo = [&](const std::string& info) { pick(itemIndex(info)); };
+            tableBoard();
+            const auto& dense = menus.at(active);
+            assert(dense.layout == MenuLayout::Table);
+            assert((dense.heads == std::vector<std::string>{"# / Time / Player", "TP", "Replay"}));
+            assert((dense.headWidths == std::vector<int>{0, 3, 2}));
+            assert(dense.items.size() == 16 && dense.chips.size() == 6);
+            assert(dense.chips[2].label == "Type" && dense.chips[3].label == "<");
+            assert(dense.chips[3].action && !dense.chips[3].selected);
+            assert(dense.chips[4].label == "1" && dense.chips[4].note && dense.chips[4].value.empty());
+            assert(dense.chips[5].label == ">" && dense.chips[5].action && dense.chips[5].selected);
+            assert(dense.items.front().info == "courses" && dense.items.front().text == "Courses: Main");
+            for (int i = 0; i < TablePageSize; ++i) {
+                const auto& item = dense.items.at(i + 1);
+                assert(item.info == "a:" + std::to_string(i) && item.cells.size() == 5);
+                assert(!item.disabled && item.highlight == (i == 0));
+                assert(item.text.find(RankingTime(table.rows[i].time)) != std::string::npos);
+                assert(item.text == RunTableLabel(table.rows[i]));
+            }
+            const auto edgeGeneration = session.generation;
+            chip("<", 0); chip("1", 0); // the first-page back arrow and page number do nothing
+            assert(session.generation == edgeGeneration && session.filter.offset == 0);
+            const auto noDialogOnExpand = shownDialogs;
+            pickInfo("a:1");
+            assert(session.expandedRow == 1 && shownDialogs == noDialogOnExpand);
+            assert(menus.at(active).items.size() == 18);
+            const auto parent = itemIndex("a:1");
+            assert(itemIndex("d:1") == parent + 1 && itemIndex("r:1") == parent + 2);
+            assert(menus.at(active).items.at(parent).cells[3] == "-");
+            assert(menus.at(active).items.at(itemIndex("r:1")).disabled);
+            const auto replayCount = replayCommands.size();
+            pickInfo("r:1"); assert(replayCommands.size() == replayCount);
+            const auto staleHandle = active;
+            const auto staleAction = menus.at(active).select;
+            const int staleReplay = itemIndex("r:1");
+            pickInfo("a:2"); // only one record is expanded; callbacks from the old one are rejected
+            assert(session.expandedRow == 2 && menus.at(active).items.size() == 18);
+            const auto currentTable = active;
+            staleAction(staleHandle, 0, staleReplay);
+            assert(active == currentTable && replayCommands.size() == replayCount);
+            pickInfo("d:2");
+            assert(dialog.title == "Table player 2" && dialog.body.find("05:16.453") != std::string::npos);
+            auto closeDetails = dialog.done; closeDetails(0, false);
+            pickInfo("a:2");
+            assert(session.expandedRow == -1 && menus.at(active).items.size() == 16);
+            const auto oldHeader = menus.at(active).chip;
+            const auto oldHeaderHandle = active;
+            chip(">", 0);
+            assert(session.filter.offset == TablePageSize && session.filter.pageSize == TablePageSize);
+            assert(session.expandedRow == -1 && !session.board && menus.at(active).layout == MenuLayout::Table);
+            const auto loadingGeneration = session.generation;
+            chip(">", 0); chip("<", 0);
+            oldHeader(oldHeaderHandle, 0, 5, 0);
+            assert(session.generation == loadingGeneration && session.filter.offset == TablePageSize);
+            tableBoard();
+            assert(menus.at(active).chips[4].label == "2");
+            chip("<", 0); assert(session.filter.offset == 0);
+            table.more = false; tableBoard();
+            const auto lastGeneration = session.generation;
+            chip(">", 0);
+            assert(session.generation == lastGeneration && !menus.at(active).chips[5].selected);
+            table.more = true;
+            tableBoard(); pickInfo("a:0"); chip("Type", 1);
+            assert(session.filter.pro && session.filter.offset == 0 && session.expandedRow == -1);
+            tableBoard(); chip("Mode", 0);
+            assert(session.filter.mode == "vanilla" && session.filter.pro);
+            tableBoard(); pickInfo("courses"); pick(1);
+            assert(session.filter.course == "Bonus" && session.filter.offset == 0);
+            tableBoard(); pickInfo("a:2");
+            const auto dialogsBeforeReplay = shownDialogs;
+            pickInfo("r:2"); // inline Replay dispatches immediately, without opening Details
+            assert(shownDialogs == dialogsBeforeReplay);
+            assert(replayCommands.size() == replayCount + 1 && replayCommands.back() == table.rows[2].id);
+            assert(!active && session.expandedRow == -1);
+
+            session.steam = playerSteam; session.filter.global = false;
+            tableBoard(); pickInfo("a:0"); pickInfo("r:0"); // a deleted local file disables only Replay
+            assert(replayCommands.size() == replayCount + 1 && session.expandedRow == 0);
+            assert(menus.at(active).items.at(itemIndex("r:0")).disabled);
+            pickInfo("d:0");
+            const auto tableDetail = session.details;
+            hud.ApplyGlobalRank(0, tableDetail, {GlobalRankState::Ready, 123, 0, 300});
+            assert(dialog.body.find("Global PB Pro #123") != std::string::npos);
+            auto closeTableDetail = dialog.done; closeTableDetail(0, false);
+            const auto noReopen = shownDialogs;
+            hud.ApplyGlobalRank(0, tableDetail, {GlobalRankState::Ready, 999, 0, 299});
+            assert(shownDialogs == noReopen && !session.details);
+
+            renderedType = MenuType::Html;
+            tableBoard();
+            assert(menus.at(active).items.at(menus.at(active).items.size() - 3).info == "prev");
+            assert(menus.at(active).items.back().info == "next");
+            dialogAvailable = false;
+            pickInfo("d:0");
+            assert(menus.at(active).title == "RUN DETAILS | Table player 0");
+            pick(0); assert(menus.at(active).layout == MenuLayout::Table);
+            dialogAvailable = true;
+            renderedType = MenuType::Chat;
+            tableBoard(); pickInfo("next");
+            assert(session.filter.offset == TablePageSize);
+            renderedType = MenuType::Panorama;
+            session.expandedRow = -1;
+            hud.Board(0, Page{});
+            assert(menus.at(active).layout == MenuLayout::Table && menus.at(active).items.size() == 2);
+            const auto emptyGeneration = session.generation;
+            chip(">", 0); assert(session.generation == emptyGeneration);
+            chip("Source", 1);
+            assert(session.filter.global && session.filter.pageSize == TablePageSize && session.courses.empty());
+            hud.ClearAll(); hud.data_.Frame();
+            assert(!active && menus.empty());
+        }
     }
 };
 }
@@ -419,6 +578,7 @@ int main() {
     menuStub.Set(&ICS2Menus::DestroyMenu, Destroy);
     menuStub.Set(&ICS2Menus::DisplayMenu, Display);
     menuStub.Set(&ICS2Menus::GetActiveMenu, Active);
+    menuStub.Set(&ICS2Menus::GetActiveMenuType, ActiveType);
     menuStub.Set(&ICS2Menus::CancelMenu, Cancel);
     menuStub.Set(&ICS2Menus::AddItem, AddItem);
     menuStub.Set(&ICS2Menus::GetItemInfo, ItemInfo);
@@ -435,6 +595,7 @@ int main() {
     menuStub.Set(&ICS2Menus::ShowMenuConfirmFor, Confirm);
     menuStub.Set(&ICS2Menus::AddMenuColumn, ColumnAdd);
     menuStub.Set(&ICS2Menus::SetItemDetails, Details);
+    menuStub.Set(&ICS2Menus::SetItemCells, Cells);
     menuStub.Set(&ICS2Menus::AddMenuChip, ChipAdd);
     menuStub.Set(&ICS2Menus::AddMenuAction, ActionAdd);
     menuStub.Set(&ICS2Menus::AddMenuNote, NoteAdd);

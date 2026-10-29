@@ -49,6 +49,7 @@ struct Session {
     std::shared_ptr<RunView> details;
     std::vector<std::string> courses;
     std::string loadingMessage;
+    int expandedRow = -1;
     std::chrono::steady_clock::time_point lastOpen{};
 };
 
@@ -83,7 +84,7 @@ class MapTopHUD final : public ISmmPlugin, public IMetamodListener {
         auto& s = sessions_[slot];
         ++s.generation;
         auto menu = s.menu; s.menu = 0; s.steam = 0; s.courses.clear(); s.board.reset();
-        s.loadingMessage.clear(); s.details.reset();
+        s.loadingMessage.clear(); s.details.reset(); s.expandedRow = -1;
         if (menus_ && menu && menus_->GetActiveMenu(slot) == menu) menus_->CancelMenu(slot);
     }
     void ClearAll() { for (int slot = 0; slot < 64; ++slot) Clear(slot); }
@@ -132,6 +133,15 @@ class MapTopHUD final : public ISmmPlugin, public IMetamodListener {
         return "MAP TOP | " + Text(f.map) + " | " + (f.global ? "GLOBAL" : "LOCAL")
             + " | " + (f.mode == "classic" ? "CKZ" : "VNL") + " | " + (f.pro ? "PRO" : "OVERALL");
     }
+    bool TableMode() const { return data_.displayMode == DisplayMode::Table; }
+    void BoardLayout(MenuHandle menu) {
+        menus_->SetMenuLayout(menu, TableMode() ? MenuLayout::Table : MenuLayout::Studio);
+        if (TableMode()) {
+            menus_->AddMenuColumn(menu, "# / Time / Player", 0, 0);
+            menus_->AddMenuColumn(menu, "TP", 3, 0);
+            menus_->AddMenuColumn(menu, "Replay", 2, 0);
+        }
+    }
     void Loading(int slot, const std::string& message) {
         sessions_[slot].loadingMessage = message;
         const auto ticket = Current(slot);
@@ -143,7 +153,7 @@ class MapTopHUD final : public ISmmPlugin, public IMetamodListener {
             else if (info == "courses") Courses(s);
             else if (info == "refresh") Reload(s, true);
         });
-        menus_->SetMenuLayout(menu, MenuLayout::Studio);
+        BoardLayout(menu);
         BoardControls(menu, ticket, sessions_[slot].filter);
         CourseControl(menu, slot);
         const int status = menus_->AddItem(menu, Text(message, 220).c_str(), "", true);
@@ -154,6 +164,8 @@ class MapTopHUD final : public ISmmPlugin, public IMetamodListener {
     }
     void Reload(int slot, bool courses = false) {
         auto& s = sessions_[slot];
+        s.filter.pageSize = TableMode() ? TablePageSize : PageSize;
+        s.expandedRow = -1;
         s.details.reset();
         ++s.generation;
         s.board.reset();
@@ -196,7 +208,7 @@ class MapTopHUD final : public ISmmPlugin, public IMetamodListener {
         state.filter.mode = mode; state.filter.offset = 0;
         Reload(slot);
     }
-    void BoardControls(MenuHandle menu, Ticket ticket, const Filter& filter) {
+    void BoardControls(MenuHandle menu, Ticket ticket, const Filter& filter, bool ready = false, bool more = false) {
         // Native chips provide dropdowns in both Studio and Table without addon changes.
         const char* sources[] = {"Local", "Global"};
         const int source = menus_->AddMenuChip(menu, "Source", sources, 2, filter.global ? 1 : 0);
@@ -204,9 +216,22 @@ class MapTopHUD final : public ISmmPlugin, public IMetamodListener {
         const char* types[] = {"Overall", "Pro"};
         const int mode = menus_->AddMenuChip(menu, "Mode", modes, 2, filter.mode == "vanilla" ? 0 : 1);
         const int type = menus_->AddMenuChip(menu, "Type", types, 2, filter.pro ? 1 : 0);
-        menus_->SetMenuChipCallback(menu, [this, ticket, source, mode, type](MenuHandle, int s, int chip, int selected) {
-            if (!Valid(s, ticket) || chip < 0) return;
-            if ((chip == source || chip == mode || chip == type) && selected == -1) {
+        int previous = -1, next = -1;
+        if (TableMode()) {
+            previous = menus_->AddMenuAction(menu, "<", nullptr, 0, ready && filter.offset > 0);
+            const auto number = std::to_string(filter.offset / RecordsPerPage(filter) + 1);
+            menus_->AddMenuNote(menu, number.c_str(), "");
+            next = menus_->AddMenuAction(menu, ">", nullptr, 0, ready && more);
+        }
+        menus_->SetMenuChipCallback(menu, [this, ticket, source, mode, type, previous, next, ready, more, filter](MenuHandle h, int s, int chip, int selected) {
+            if (!Valid(s, ticket) || chip < 0 || sessions_[s].menu != h || menus_->GetActiveMenu(s) != h) return;
+            if (chip == previous && ready && filter.offset > 0) {
+                sessions_[s].filter.offset = std::max(0, filter.offset - RecordsPerPage(filter)); Reload(s);
+            }
+            else if (chip == next && ready && more) {
+                sessions_[s].filter.offset = filter.offset + RecordsPerPage(filter); Reload(s);
+            }
+            else if ((chip == source || chip == mode || chip == type) && selected == -1) {
                 // Selecting the current stock chip option clears it. These required filters may not be empty.
                 // Rebuild without invalidating any record request already in flight.
                 if (sessions_[s].board) Board(s, *sessions_[s].board);
@@ -226,9 +251,25 @@ class MapTopHUD final : public ISmmPlugin, public IMetamodListener {
     void CourseControl(MenuHandle menu, int slot) {
         const auto& session = sessions_[slot];
         const auto course = Text(session.filter.course, 64);
-        const int item = menus_->AddItem(menu, course.empty() ? "Select course" : course.c_str(), "courses", session.courses.empty());
+        const auto label = TableMode() ? "Courses: " + (course.empty() ? std::string("Select course") : course)
+                                       : (course.empty() ? std::string("Select course") : course);
+        const int item = menus_->AddItem(menu, label.c_str(), "courses", session.courses.empty());
         menus_->SetItemSubtext(menu, item, "Courses ▾");
         menus_->SetItemSpan(menu, item, 3);
+    }
+    void PagerItems(MenuHandle menu, const Filter& filter, bool more) {
+        const auto currentPage = "Page " + std::to_string(filter.offset / RecordsPerPage(filter) + 1);
+        menus_->AddItem(menu, "<", "prev", filter.offset == 0);
+        const int current = menus_->AddItem(menu, currentPage.c_str(), "page", false);
+        menus_->SetItemHighlight(menu, current, true);
+        menus_->AddItem(menu, ">", "next", !more);
+    }
+    void ToggleTableActions(int slot, int index) {
+        auto& s = sessions_[slot];
+        if (!TableMode() || !s.board || index < 0 || index >= static_cast<int>(s.board->rows.size())) return;
+        s.expandedRow = s.expandedRow == index ? -1 : index;
+        ++s.generation; // Old row/action callbacks must not operate a newly expanded record.
+        Board(slot, *s.board);
     }
     void Board(int slot, Page page) {
         sessions_[slot].details.reset();
@@ -236,51 +277,64 @@ class MapTopHUD final : public ISmmPlugin, public IMetamodListener {
         const auto filter = sessions_[slot].filter;
         sessions_[slot].board = page;
         auto menu = Create(Title(slot), [this, ticket, page, filter](MenuHandle h, int s, int item) {
-            if (!Valid(s, ticket)) return;
+            if (!Valid(s, ticket) || sessions_[s].menu != h || menus_->GetActiveMenu(s) != h) return;
             const std::string info = menus_->GetItemInfo(h, item);
             if (info == "courses") Courses(s);
             else if (info == "prev" && filter.offset > 0) {
-                sessions_[s].filter.offset = std::max(0, filter.offset - PageSize); Reload(s);
+                sessions_[s].filter.offset = std::max(0, filter.offset - RecordsPerPage(filter)); Reload(s);
             }
             else if (info == "next" && page.more) {
-                sessions_[s].filter.offset = filter.offset + PageSize; Reload(s);
+                sessions_[s].filter.offset = filter.offset + RecordsPerPage(filter); Reload(s);
             }
             else if (info == "overall") ChangeCategory(s, false);
             else if (info == "pro") ChangeCategory(s, true);
-            else if (info.rfind("p:", 0) == 0 || info.rfind("r:", 0) == 0) {
+            else if (info.rfind("p:", 0) == 0 || info.rfind("r:", 0) == 0 || info.rfind("a:", 0) == 0 || info.rfind("d:", 0) == 0) {
                 const int index = std::atoi(info.c_str() + 2);
                 if (index < 0 || index >= static_cast<int>(page.rows.size())) return;
-                if (info[0] == 'r') StartReplay(s, page.rows[index], filter);
+                if (info[0] == 'a') ToggleTableActions(s, index);
+                else if (info[0] == 'r') StartReplay(s, page.rows[index], filter);
                 else RunPopup(s, page.rows[index], filter);
             }
         });
-        menus_->SetMenuLayout(menu, MenuLayout::Studio);
+        BoardLayout(menu);
         menus_->SetMenuTextFeatures(menu, 0);
-        BoardControls(menu, ticket, filter);
+        BoardControls(menu, ticket, filter, true, page.more);
         CourseControl(menu, slot);
         for (size_t i = 0; i < page.rows.size(); ++i) {
             const auto& row = page.rows[i];
-            const auto profile = "p:" + std::to_string(i);
-            const auto label = "#" + std::to_string(row.rank) + " " + Text(row.name, 32);
+            const auto profile = std::string(TableMode() ? "a:" : "p:") + std::to_string(i);
+            const auto label = TableMode() ? RunTableLabel(row) : "#" + std::to_string(row.rank) + " " + Text(row.name, 32);
             const int summary = menus_->AddItem(menu, label.c_str(), profile.c_str(), false);
-            menus_->SetItemSpan(menu, summary, 2);
-            menus_->SetItemSubtext(menu, summary, (RankingTime(row.time) + " | TP " + std::to_string(row.teleports)).c_str());
             menus_->SetItemHighlight(menu, summary, row.steam == sessions_[slot].steam);
-            const int replay = menus_->AddItem(menu, "Replay ▶", ("r:" + std::to_string(i)).c_str(), !row.replay);
-            if (!row.replay) menus_->SetItemSubtext(menu, replay, "Unavailable");
+            if (TableMode()) {
+                const bool expanded = sessions_[slot].expandedRow == static_cast<int>(i);
+                const auto cells = RunTableCells(row, expanded);
+                std::array<const char*, 5> values;
+                for (size_t cell = 0; cell < cells.size(); ++cell) values[cell] = cells[cell].c_str();
+                menus_->SetItemCells(menu, summary, values.data(), static_cast<int>(values.size()));
+                // HTML/chat keep time in the main label; retain the other columns through subtext.
+                menus_->SetItemSubtext(menu, summary, ("TP " + std::to_string(row.teleports)
+                    + (row.replay ? " | Replay ready" : " | Replay unavailable")).c_str());
+                if (expanded) {
+                    menus_->AddItem(menu, "  > Details", ("d:" + std::to_string(i)).c_str(), false);
+                    const int replay = menus_->AddItem(menu, "  > Replay", ("r:" + std::to_string(i)).c_str(), !row.replay);
+                    if (!row.replay) menus_->SetItemSubtext(menu, replay, "Unavailable");
+                }
+            } else {
+                menus_->SetItemSpan(menu, summary, 2);
+                menus_->SetItemSubtext(menu, summary, (RankingTime(row.time) + " | TP " + std::to_string(row.teleports)).c_str());
+                const int replay = menus_->AddItem(menu, "Replay ▶", ("r:" + std::to_string(i)).c_str(), !row.replay);
+                if (!row.replay) menus_->SetItemSubtext(menu, replay, "Unavailable");
+            }
         }
         if (page.rows.empty()) {
             const int empty = menus_->AddItem(menu, "No records in this category.", "", true);
             menus_->SetItemSpan(menu, empty, 3);
         }
-        // Use the same 138px buttons / 3px margins as record rows. Choice segments are 142px with no inner margins.
-        const auto currentPage = "Page " + std::to_string(filter.offset / PageSize + 1);
-        menus_->AddItem(menu, "<", "prev", filter.offset == 0);
-        const int current = menus_->AddItem(menu, currentPage.c_str(), "page", false);
-        menus_->SetItemHighlight(menu, current, true);
-        menus_->AddItem(menu, ">", "next", !page.more);
+        if (!TableMode()) PagerItems(menu, filter, page.more);
         menus_->SetMenuRefreshCallback(menu, [this, ticket](MenuHandle, int s) { if (Valid(s, ticket)) Reload(s); });
-        Present(slot, menu);
+        if (Present(slot, menu) && TableMode() && menus_->GetActiveMenuType(slot) != MenuType::Panorama)
+            PagerItems(menu, filter, page.more); // HTML/chat do not render header chips.
     }
     void Courses(int slot) {
         const auto courses = sessions_[slot].courses;
@@ -450,7 +504,7 @@ public:
         g_SMAPI->AddListener(this, this);
         dispatch_.Add(g_engineCvar); command_.Add(clients); hudClick_.Add(clients); frame_.Add(server); disconnect_.Add(clients);
         Refresh();
-        META_CONPRINTF("[MapTop HUD] Loaded 0.1.13. Use !maptop or !mtop. Config: %s\n", data_.configError.empty() ? "OK" : data_.configError.c_str());
+        META_CONPRINTF("[MapTop HUD] Loaded 0.1.15. Use !maptop or !mtop. Config: %s\n", data_.configError.empty() ? "OK" : data_.configError.c_str());
         return true;
     }
     void AllPluginsLoaded() override { Refresh(); }
@@ -473,7 +527,7 @@ public:
     const char* GetDescription() override { return "Local/global CS2KZ leaderboard and replay/profile menus via CS2Menus"; }
     const char* GetURL() override { return "https://github.com/FemboyKZ/mm-cs2menus"; }
     const char* GetLicense() override { return "AGPLv3"; }
-    const char* GetVersion() override { return "0.1.13"; }
+    const char* GetVersion() override { return "0.1.15"; }
     const char* GetDate() override { return __DATE__; }
     const char* GetLogTag() override { return "KZ-MAPTOP"; }
 };

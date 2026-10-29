@@ -1,4 +1,6 @@
-# KZ MapTop HUD 0.1.13
+# KZ MapTop HUD 0.1.15
+
+[English](README.md) | 日本語
 
 CS2KZ **v0.0.189** 向けの独立した Linux x86_64 Metamod プラグインです。
 `!maptop` で現在のマップのタイムランキングをブロック表示します。
@@ -11,7 +13,43 @@ Linux バイナリのビルド、Metamod API18 の実バイナリ検査、
 CS2 サーバーでの読み込み、HUD の見た目・マウス操作、リプレイ再生は検証が必要です。
 既存の RTV HUD や CS2KZ のファイルは変更しません。
 
-## 0.1.13 の操作・表示
+## 0.1.15 の表示モード
+
+既存の **`addons/kz_maptop_hud/config.json`** の `display_mode` だけで表示モードを変更します。
+ゲーム内の表示モード選択やプレイヤーごとの上書き設定はありません。
+`"studio"` が既定値で、既存JSONに項目がない場合も従来のStudioを使用します。
+
+```json
+{
+  "menu_seconds": 120,
+  "display_mode": "table"
+}
+```
+
+変更後はサーバーコンソールで **`kz_reload_config`** を実行し、`!mtop` を開き直します。
+再読み込み時は現在のHUDを閉じ、古い取得結果を破棄します。
+JSONやモード名が不正な場合は直前のHUD設定を保持し、初回起動時はStudioを使用します。
+
+- **Studio**：従来どおり1ページ5件。横長の情報ボタンと直接Replayボタンを表示します。
+- **Table**：ページャーをTypeの直後へ **`< n >`** の順に配置し、**最大15件**を表示します。
+  中央の数字は表示のみです。ページの端や読み込み中に矢印を押しても移動しません。
+  主列は順位・タイム・プレイヤーを並べ、タイムを `05:14.453` のような一続きの文字列で表示します。
+  タイムを2文字ずつ別セルへ分割する表示は廃止しました。別列にTP数とReplayの展開・可否を表示します。
+  Replay列を含む行を押すと、その直下に **Details**・**Replay** を展開します。
+  同じ行を再度押すと閉じ、別の行を押すと展開先を切り替えます。
+  標準APIのクリック判定は行全体なので、Replay列以外の箇所からも展開できます。
+  Detailsは既存の詳細ダイアログ、Replayは確認を挟まない直接再生です。
+  Replayがない記録もDetailsは使用でき、Replayだけを無効にします。
+  プロフィールURLは詳細の **Actions** から操作できます。
+  標準Tableの18行に、コース選択1行・記録15行・展開操作2行を収めます。
+
+両方のモードでLocal / Global、VNL / CKZ、Overall / Pro、コース選択、自分の記録の強調、
+Local詳細のGlobal PB順位取得を共通で使用します。表示モードに応じてSQL・APIの取得件数とページ送りを合わせます。
+TP数が列幅を超える場合は末尾を `..` にし、完全な値は詳細に表示します。
+HTML・チャットはヘッダー操作を描画しないため、下部のページャーを維持します。
+一続きのタイム表示と、行の直下に展開するDetails・Replayも使用できます。
+
+## Studioモードの操作・表示（0.1.13から継続）
 
 **標準のCS2Menusだけを使用し、サーバー側・Workshop側とも拡張しません。**
 ZIPに含める実行バイナリはMapTop HUDの `.so` だけです。
@@ -95,10 +133,10 @@ Metadataが空・旧形式・不正な場合は区間統計だけを省略し、
 公開APIにはこれらを非表示にする設定がないため、閉じるだけにする変更は含みません。
 履歴や更新のないときも、対応するアイコンは非表示ではなく無効表示になります。
 
-**0.1.13のゲーム内描画・マウス操作は未確認**です。コード上の構成・操作先と実バイナリのAPIをテストしています。
+**両モードのゲーム内描画・マウス操作は未確認**です。コード上の構成・操作先と実バイナリのAPIをテストしています。
 
 更新時はサーバーを停止し、`kz_maptop_hud.so` を差し替えて再起動してください。
-`meta list` の **KZ MapTop HUD 0.1.13** を確認します。既存cfg・DB・Workshopの更新は不要です。
+`meta list` の **KZ MapTop HUD 0.1.15** を確認します。既存のCS2KZ cfg・DB・Workshopの更新は不要です。
 0.1.5同梱のCS2Menus拡張版を導入していた場合は、バックアップした標準の `cs2menus.so` に戻してください。
 
 ## 0.1.1 の修正・0.1.0 からの更新
@@ -109,8 +147,8 @@ Metadataが空・旧形式・不正な場合は区間統計だけを省略し、
 ランキング・リプレイ・プロフィールの処理や既存cfgの参照方法はそのままです。
 
 更新時はサーバーを停止し、`game/csgo/addons/kz_maptop_hud/bin/linuxsteamrt64/kz_maptop_hud.so`
-を最新の0.1.13へ差し替えて再起動してください。既存cfgやDBの変更は不要です。
-`meta list` の **KZ MapTop HUD 0.1.13** を確認し、`!mtop` で再確認してください。
+を最新の0.1.15へ差し替えて再起動してください。既存cfgやDBの変更は不要です。
+`meta list` の **KZ MapTop HUD 0.1.15** を確認し、`!mtop` で再確認してください。
 `kz_reload_config` はバイナリの差し替えには使用できません。
 修正版の実サーバーでの動作は、まだ確認していません。
 
@@ -153,9 +191,10 @@ Source・Mode・Typeの上部ドロップダウンによる変更はPanorama向�
 1. 検証用サーバーを停止し、ZIP内の **`game/csgo/` の中身**をサーバーの `game/csgo/` に配置します。
 2. 接続情報の追加設定は不要です。**`cfg/cs2kz-server-config.txt` をそのまま参照**します。
    CS2KZ と同じ Valve KeyValues パーサーで `db` と `apiUrl` を読み取ります。
-3. `addons/kz_maptop_hud/config.json` は表示時間 `menu_seconds` のみです。省略時は120秒です。
+3. `addons/kz_maptop_hud/config.json` は表示時間 `menu_seconds`（省略時120秒）と
+   表示モード `display_mode`（省略時 `studio`）を設定します。
 4. CS2Menus、CS2KZ、SQLMM、MultiAddonManager がある状態で起動し、サーバーコンソールの `meta list` で
-   **KZ MapTop HUD 0.1.13** を確認します。
+   **KZ MapTop HUD 0.1.15** を確認します。
 5. ゲーム内で `!mtop` を実行し、Local / Global の両方を確認します。
 
 参照する設定と解釈は次のとおりです。
@@ -217,11 +256,13 @@ ctest --test-dir build --output-on-failure
 python3 tools/package.py build/kz_maptop_hud.so
 ```
 
-成果物は `build/kz_maptop_hud.so`、配置用ZIPは `release/KZ-MapTop-HUD-0.1.13-linux.zip`。
-ZIPには導入用の `.so`・VDF・初期設定、説明書・ライセンス、対応するソースと再ビルド用ファイル、
+成果物は `build/kz_maptop_hud.so`、配置用ZIPは `release/KZ-MapTop-HUD-0.1.15-linux.zip`。
+ZIPには導入用の `.so`・VDF・初期設定、英語・日本語の説明書・ライセンス、対応するソースと再ビルド用ファイル、
 検証用のマニフェスト・SHA-256一覧を含めます。梱包するファイルの種類と配置ファイルを
 `tools/package.py` で限定し、ビルド中間物・調査データ・ログ・バックアップの混入を防ぎます。
-`release/` には最新版のZIPだけを残します。
+ZIPと同じ場所に、ZIP全体の検証用ファイル `KZ-MapTop-HUD-0.1.15-linux.zip.sha256` も生成します。
+ダウンロード後は両方を同じディレクトリへ置き、`sha256sum -c KZ-MapTop-HUD-0.1.15-linux.zip.sha256` で検証できます。
+`release/` には最新版のZIP・チェックサムとリリース説明だけを残します。
 CS2と同じホストでコンパイルするときは、サーバーを停止してメモリ消費に注意してください。
 配布バイナリは Steam Runtime Sniper SDK 内の GCC 10.3 でビルドしています。
 Windows ネイティブ用DLLは含みません。Windowsでは Docker / WSL 内で Linux 用にビルドしてください。
@@ -235,6 +276,13 @@ ctest --test-dir build-tests --output-on-failure
 ```
 
 ## 検証記録と残る確認
+
+0.1.15ではヘッダーページャー、一続きのタイム表示、Details・Replayの行展開、展開前の古い操作の拒否、
+読み込み中・ページ端の操作、HTML・チャットの下部ページャーを実処理の回帰テストへ追加しています。
+既存Studioの回帰テストも維持しています。
+2026-10-29にSteam Runtime Sniper SDK / GCC 10.3で本体を再ビルドし、実バイナリのAPI18検査を含む
+CTest 6件すべての成功を確認しました。Tableの15件単位の取得・ページ送り、絞り込み・コース選択、
+詳細・Replay可否・再生先、古いコールバックの破棄を含みます。ゲーム内での描画・操作は引き続き未確認です。
 
 2026-10-24 作成。
 

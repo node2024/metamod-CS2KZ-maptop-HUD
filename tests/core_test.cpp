@@ -1,6 +1,7 @@
 #include "model.h"
 #include "hud_click.h"
 #include "run_details.h"
+#include "hud_settings.h"
 #include <cassert>
 #include <iostream>
 #include <fstream>
@@ -31,6 +32,7 @@ int main(int argc, char** argv) {
         filter.pro = argc > 2 && std::string(argv[2]) == "pro";
         if (argc > 3) filter.offset = std::stoi(argv[3]);
         if (argc > 4) filter.mode = argv[4];
+        if (argc > 5) filter.pageSize = std::stoi(argv[5]);
         std::cout << (std::string(argv[1]) == "--sql" ? RecordsSQL(filter, Escape) : RankingCountSQL(filter, Escape)); return 0;
     }
     const std::string background = "\x08\x01\x12\x08" "cs_stage";
@@ -174,5 +176,42 @@ int main(int argc, char** argv) {
     response["values"][0]["teleports"] = 1;
     bool rejected = false; try { ParseRecords(response.dump(), filter); } catch (...) { rejected = true; }
     assert(rejected);
+    const auto defaults = ReadHudSettings(Json::object());
+    assert(defaults.menuSeconds == 120 && defaults.displayMode == DisplayMode::Studio);
+    const auto tableSettings = ReadHudSettings({{"display_mode", "table"}, {"menu_seconds", 300}});
+    assert(tableSettings.displayMode == DisplayMode::Table && tableSettings.menuSeconds == 300);
+    assert(ReadHudSettings({{"display_mode", "studio"}, {"menu_seconds", 1}}).menuSeconds == 15);
+    assert(ReadHudSettings({{"menu_seconds", 999}}).menuSeconds == 600);
+    for (const auto& bad : {Json::array(), Json(nullptr), Json{{"display_mode", "grid"}},
+                           Json{{"display_mode", true}}, Json{{"menu_seconds", "120"}}}) {
+        bool invalid = false;
+        try { ReadHudSettings(bad); } catch (const std::exception&) { invalid = true; }
+        assert(invalid);
+    }
+    Filter tableFilter = filter;
+    tableFilter.pageSize = TablePageSize; tableFilter.offset = TablePageSize; tableFilter.pro = false;
+    assert(RecordsURL("", tableFilter).find("limit=16&offset=15") != std::string::npos);
+    assert(RecordsSQL(tableFilter, Escape).find("LIMIT 16 OFFSET 15") != std::string::npos);
+    Json tableResponse = {{"values", Json::array()}};
+    for (int i = 0; i <= TablePageSize; ++i) tableResponse["values"].push_back({
+        {"id", uuid}, {"player", {{"id", "STEAM_1:0:182656610"}, {"name", "Player"}}},
+        {"time", 65.125 + i}, {"teleports", i}, {"replay_available", i != 1}});
+    const auto tablePage = ParseRecords(tableResponse.dump(), tableFilter);
+    assert(tablePage.rows.size() == TablePageSize && tablePage.more);
+    assert(tablePage.rows.front().rank == 16 && tablePage.rows.back().rank == 30);
+    tableResponse["values"].erase(TablePageSize);
+    assert(!ParseRecords(tableResponse.dump(), tableFilter).more);
+    auto cells = RunTableCells(tablePage.rows.front());
+    assert(RunTableLabel(tablePage.rows.front()) == "#16   01:05.125   Player");
+    assert(cells[0] + cells[1] + cells[2] == "0     " && cells[3] == "+" && cells[4] == "OK");
+    const auto unavailable = RunTableCells(tablePage.rows[1]);
+    assert(unavailable[3] == "+" && unavailable[4] == "No");
+    assert(RunTableCells(tablePage.rows.front(), true)[3] == "-");
+    auto oversized = tablePage.rows[0]; oversized.time = 360000; oversized.teleports = 1234567;
+    cells = RunTableCells(oversized);
+    assert(cells[2] == "..");
+    assert(RunTableLabel(oversized).find("100:00:00.000") != std::string::npos);
+    tableFilter.pageSize = 999; assert(RecordsPerPage(tableFilter) == TablePageSize);
+    tableFilter.pageSize = 0; assert(RecordsPerPage(tableFilter) == 1);
     std::cout << "core: OK\n";
 }
